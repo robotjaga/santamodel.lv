@@ -4,6 +4,7 @@ const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const submissionsFile = path.join(process.cwd(), 'submissions.json');
+let inMemorySubmissions = [];
 
 function safeText(value) {
   return String(value ?? '').trim();
@@ -13,14 +14,24 @@ function readSubmissions() {
   try {
     const raw = fs.readFileSync(submissionsFile, 'utf8');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed) && parsed.length) {
+      inMemorySubmissions = parsed;
+      return parsed;
+    }
   } catch (error) {
-    return [];
+    // Ignore file-system issues in serverless deployments and fall back to in-memory storage.
   }
+
+  return Array.isArray(inMemorySubmissions) ? inMemorySubmissions : [];
 }
 
 function writeSubmissions(entries) {
-  fs.writeFileSync(submissionsFile, JSON.stringify(entries, null, 2));
+  try {
+    fs.writeFileSync(submissionsFile, JSON.stringify(entries, null, 2));
+    inMemorySubmissions = entries;
+  } catch (error) {
+    inMemorySubmissions = entries;
+  }
 }
 
 async function sendEmailNotification(formData) {
@@ -98,9 +109,13 @@ module.exports = async function handler(req, res) {
     message: safeText(formData.message),
   };
 
-  const entries = readSubmissions();
-  entries.unshift(submission);
-  writeSubmissions(entries);
+  try {
+    const entries = readSubmissions();
+    entries.unshift(submission);
+    writeSubmissions(entries);
+  } catch (error) {
+    // Keep the response successful even when the filesystem is unavailable in serverless environments.
+  }
 
   try {
     const emailResult = await sendEmailNotification(submission);
